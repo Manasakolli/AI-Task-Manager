@@ -203,8 +203,8 @@ export default function VoiceModal({
             lineHeight: 1.8 
           }}>
             <li>Speak clearly and naturally</li>
-            <li>Mention: task name, required skills, priority level, estimated hours</li>
-            <li>Example: "Create a high priority React dashboard with authentication, needs 40 hours"</li>
+            <li>Mention: task name, required skills, priority level, estimated hours, deadline</li>
+            <li>Example: "Create a high priority React dashboard with authentication, needs 40 hours, due by Friday"</li>
           </ul>
         </div>
       </div>

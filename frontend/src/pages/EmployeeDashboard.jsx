@@ -13,6 +13,8 @@ export default function EmployeeDashboard() {
   const [tasks, setTasks] = useState([]);
   const [selectedTask, setSelectedTask] = useState(null);
   const [actualHours, setActualHours] = useState('');
+  const [delayReason, setDelayReason] = useState('');
+  const [delayDetails, setDelayDetails] = useState('');
   const [showPerformance, setShowPerformance] = useState(false);
   const [employeeData, setEmployeeData] = useState(null);
   const [showSkillsSetup, setShowSkillsSetup] = useState(false);
@@ -21,6 +23,9 @@ export default function EmployeeDashboard() {
   const [analytics, setAnalytics] = useState(null);
   const [filters, setFilters] = useState({ priority: '', status: '', deadline: '', skill: '' });
   const [filterOpen, setFilterOpen] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     loadTasks();
@@ -33,6 +38,122 @@ export default function EmployeeDashboard() {
     }, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (tasks.length > 0) {
+      generateNotifications();
+    }
+  }, [tasks]);
+
+  const generateNotifications = () => {
+    const newNotifications = [];
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    // Overdue tasks
+    const overdueTasks = tasks.filter(t => 
+      t.status !== 'completed' && t.dueDate && new Date(t.dueDate) < today
+    );
+    if (overdueTasks.length > 0) {
+      newNotifications.push({
+        id: 'overdue',
+        type: 'error',
+        icon: '⚠️',
+        title: `${overdueTasks.length} Overdue Task${overdueTasks.length > 1 ? 's' : ''}`,
+        message: 'Complete these tasks immediately',
+        priority: 1,
+        tasks: overdueTasks
+      });
+    }
+
+    // Due today
+    const dueTodayTasks = tasks.filter(t => {
+      if (t.status === 'completed' || !t.dueDate) return false;
+      const dueDate = new Date(t.dueDate);
+      return dueDate.toDateString() === today.toDateString();
+    });
+    if (dueTodayTasks.length > 0) {
+      newNotifications.push({
+        id: 'due-today',
+        type: 'warning',
+        icon: '🔥',
+        title: `${dueTodayTasks.length} Task${dueTodayTasks.length > 1 ? 's' : ''} Due Today`,
+        message: 'Focus on completing these tasks',
+        priority: 2,
+        tasks: dueTodayTasks
+      });
+    }
+
+    // Due tomorrow
+    const dueTomorrowTasks = tasks.filter(t => {
+      if (t.status === 'completed' || !t.dueDate) return false;
+      const dueDate = new Date(t.dueDate);
+      return dueDate.toDateString() === tomorrow.toDateString();
+    });
+    if (dueTomorrowTasks.length > 0) {
+      newNotifications.push({
+        id: 'due-tomorrow',
+        type: 'info',
+        icon: '📅',
+        title: `${dueTomorrowTasks.length} Task${dueTomorrowTasks.length > 1 ? 's' : ''} Due Tomorrow`,
+        message: 'Plan ahead for these tasks',
+        priority: 3,
+        tasks: dueTomorrowTasks
+      });
+    }
+
+    // Pending tasks not started
+    const pendingTasks = tasks.filter(t => t.status === 'assigned');
+    if (pendingTasks.length > 0) {
+      newNotifications.push({
+        id: 'pending',
+        type: 'info',
+        icon: '⏰',
+        title: `${pendingTasks.length} Pending Task${pendingTasks.length > 1 ? 's' : ''}`,
+        message: 'Start working on these tasks',
+        priority: 4,
+        tasks: pendingTasks
+      });
+    }
+
+    // Learning tasks
+    const learningTasks = tasks.filter(t => 
+      t.isLearningTask && t.status !== 'completed'
+    );
+    if (learningTasks.length > 0) {
+      newNotifications.push({
+        id: 'learning',
+        type: 'success',
+        icon: '🎓',
+        title: `${learningTasks.length} Learning Opportunit${learningTasks.length > 1 ? 'ies' : 'y'}`,
+        message: 'Check learning resources to upskill',
+        priority: 5,
+        tasks: learningTasks
+      });
+    }
+
+    // High priority tasks
+    const highPriorityTasks = tasks.filter(t => 
+      t.priority === 'high' && t.status !== 'completed'
+    );
+    if (highPriorityTasks.length > 0) {
+      newNotifications.push({
+        id: 'high-priority',
+        type: 'warning',
+        icon: '🔥',
+        title: `${highPriorityTasks.length} High Priority Task${highPriorityTasks.length > 1 ? 's' : ''}`,
+        message: 'These tasks need immediate attention',
+        priority: 2,
+        tasks: highPriorityTasks
+      });
+    }
+
+    newNotifications.sort((a, b) => a.priority - b.priority);
+    setNotifications(newNotifications);
+    setUnreadCount(newNotifications.length);
+  };
 
   const loadAnalytics = async () => {
     try {
@@ -92,16 +213,36 @@ export default function EmployeeDashboard() {
   const handleCompleteTask = async () => {
     if (!selectedTask || !actualHours) return;
     
+    const isDelayed = parseFloat(actualHours) > selectedTask.estimatedHours;
+    if (isDelayed && !delayReason) {
+      toast.error('Please provide a reason for the delay');
+      return;
+    }
+    if (isDelayed && (delayReason === 'Other' || delayReason === 'Learning new skills (Learning Opportunity)') && !delayDetails.trim()) {
+      toast.error('Please provide additional details');
+      return;
+    }
+    
     try {
       const token = await user.getIdToken?.() || '';
-      await api.patch(`/api/tasks/${selectedTask.id}/complete`, 
-        { actualHours: parseFloat(actualHours) },
+      const payload = { actualHours: parseFloat(actualHours) };
+      
+      if (isDelayed) {
+        payload.delayReason = delayReason;
+        if (delayReason === 'Other' || delayReason === 'Learning new skills (Learning Opportunity)') {
+          payload.delayDetails = delayDetails;
+        }
+      }
+      
+      await api.patch(`/api/tasks/${selectedTask.id}/complete`, payload,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       
       toast.success('Task completed successfully!');
       setSelectedTask(null);
       setActualHours('');
+      setDelayReason('');
+      setDelayDetails('');
       loadTasks();
       loadEmployeeData();
       loadAnalytics();
@@ -224,10 +365,69 @@ export default function EmployeeDashboard() {
             </div>
           )}
         </div>
-        <button onClick={handleLogout} className="logout-btn">
-          <span>Logout</span>
-        </button>
+        <div style={{display: 'flex', alignItems: 'center', gap: '1rem'}}>
+          <div className="notification-bell" onClick={() => setShowNotifications(!showNotifications)}>
+            🔔
+            {unreadCount > 0 && (
+              <span className="notification-badge">{unreadCount}</span>
+            )}
+          </div>
+          <button onClick={handleLogout} className="logout-btn">
+            <span>Logout</span>
+          </button>
+        </div>
       </div>
+
+      {showNotifications && (
+        <div className="notification-dropdown-overlay" onClick={() => setShowNotifications(false)}>
+          <div className="notification-dropdown" onClick={(e) => e.stopPropagation()}>
+            <div className="notification-header">
+              <h3>📬 Notifications</h3>
+              <button onClick={() => setShowNotifications(false)} className="notification-close">×</button>
+            </div>
+            <div className="notification-list">
+              {notifications.length === 0 ? (
+                <div className="no-notifications">
+                  <div style={{fontSize: '3rem', marginBottom: '0.5rem'}}>✅</div>
+                  <p>All caught up!</p>
+                  <p style={{fontSize: '0.85rem', color: '#999'}}>No pending notifications</p>
+                </div>
+              ) : (
+                notifications.map(notif => (
+                  <div key={notif.id} className={`notification-item notification-${notif.type}`}>
+                    <div className="notification-icon">{notif.icon}</div>
+                    <div className="notification-content">
+                      <div className="notification-title">{notif.title}</div>
+                      <div className="notification-message">{notif.message}</div>
+                      {notif.tasks && notif.tasks.length > 0 && (
+                        <div className="notification-tasks">
+                          {notif.tasks.slice(0, 3).map(task => (
+                            <div key={task.id} className="notification-task-item">
+                              • {task.title}
+                            </div>
+                          ))}
+                          {notif.tasks.length > 3 && (
+                            <div className="notification-task-item" style={{fontStyle: 'italic', color: '#999'}}>
+                              +{notif.tasks.length - 3} more
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            {notifications.length > 0 && (
+              <div className="notification-footer">
+                <button onClick={() => { setUnreadCount(0); setShowNotifications(false); }} className="mark-read-btn">
+                  Mark all as read
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="dashboard-content">
         <div className="main-section">
@@ -333,6 +533,11 @@ export default function EmployeeDashboard() {
                         <span className={`status-badge status-${task.status}`}>
                           {task.status.replace('-', ' ').toUpperCase()}
                         </span>
+                        {task.isLearningTask && (
+                          <span className="learning-opportunity-badge">
+                            🎓 Learning Opportunity
+                          </span>
+                        )}
                       </div>
                       
                       <div className="task-details">
@@ -370,6 +575,35 @@ export default function EmployeeDashboard() {
                       {task.isLearningTask && (
                         <div className="learning-note">
                           🎓 Learning Opportunity: Extra time allocated for skill acquisition
+                        </div>
+                      )}
+
+                      {task.isLearningTask && task.learningResources && Object.keys(task.learningResources).length > 0 && (
+                        <div className="learning-resources-section">
+                          <h4 className="learning-resources-title">📚 Learning Resources</h4>
+                          {Object.entries(task.learningResources).map(([skill, resources]) => (
+                            <div key={skill} className="skill-resources-group">
+                              <div className="skill-resources-header">{skill}</div>
+                              <div className="resources-list">
+                                {resources.map((resource, idx) => (
+                                  <a 
+                                    key={idx} 
+                                    href={resource.url} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer" 
+                                    className="resource-link"
+                                  >
+                                    <span className="resource-type-badge">{resource.type}</span>
+                                    <div className="resource-info">
+                                      <div className="resource-title">{resource.title}</div>
+                                      <div className="resource-description">{resource.description}</div>
+                                    </div>
+                                    <span className="resource-arrow">→</span>
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       )}
 
@@ -421,7 +655,7 @@ export default function EmployeeDashboard() {
               <h3>Complete Task</h3>
               <div className="selected-task-info">
                 <h4>{selectedTask.title}</h4>
-                <p>Please enter the actual hours worked on this task.</p>
+                <p>Estimated: {selectedTask.estimatedHours}h</p>
               </div>
               
               <div className="input-group">
@@ -437,11 +671,56 @@ export default function EmployeeDashboard() {
                 />
               </div>
               
+              {actualHours && parseFloat(actualHours) > selectedTask.estimatedHours && (
+                <>
+                  <div className="input-group">
+                    <label className="delay-label">⚠️ Reason for Delay *</label>
+                    <select
+                      value={delayReason}
+                      onChange={(e) => {
+                        setDelayReason(e.target.value);
+                        if (e.target.value !== 'Other' && e.target.value !== 'Learning new skills (Learning Opportunity)') {
+                          setDelayDetails('');
+                        }
+                      }}
+                      className="hours-input"
+                      required
+                    >
+                      <option value="">Select a reason</option>
+                      <option value="Health issues">Health issues</option>
+                      <option value="Network issues">Network issues</option>
+                      <option value="Dependency on others">Dependency on others</option>
+                      <option value="Learning new skills (Learning Opportunity)">Learning new skills (Learning Opportunity)</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  
+                  {(delayReason === 'Other' || delayReason === 'Learning new skills (Learning Opportunity)') && (
+                    <div className="input-group">
+                      <label>Additional Details *</label>
+                      <textarea
+                        value={delayDetails}
+                        onChange={(e) => setDelayDetails(e.target.value)}
+                        placeholder="Please provide more details..."
+                        className="delay-textarea"
+                        rows="3"
+                        required
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+              
               <div className="action-buttons">
                 <button onClick={handleCompleteTask} disabled={!actualHours} className="btn btn-primary">
                   Complete Task
                 </button>
-                <button onClick={() => setSelectedTask(null)} className="btn btn-secondary">
+                <button onClick={() => {
+                  setSelectedTask(null);
+                  setActualHours('');
+                  setDelayReason('');
+                  setDelayDetails('');
+                }} className="btn btn-secondary">
                   Cancel
                 </button>
               </div>

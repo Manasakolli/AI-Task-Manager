@@ -1,6 +1,7 @@
 const firebaseService = require('../services/firebaseService');
 const aiService = require('../services/aiService');
 const performanceService = require('../services/performanceService');
+const { getLearningResources } = require('../services/learningResourcesService');
 const { AppError } = require('../middlewares/errorHandler');
 
 class TaskController {
@@ -33,6 +34,19 @@ class TaskController {
       for (const subtask of aiResult.subtasks) {
         const dueDate = new Date(Date.now() + subtask.daysNeeded * 24 * 60 * 60 * 1000);
         
+        // Get learning resources if it's a learning task
+        let learningResources = null;
+        if (subtask.isLearningTask && requiredSkills.length > 0) {
+          const employee = employees.find(e => e.uid === subtask.employeeId);
+          const employeeSkills = (employee?.skills || []).map(s => s.toLowerCase());
+          const gapSkills = requiredSkills.filter(skill => 
+            !employeeSkills.includes(skill.toLowerCase())
+          );
+          if (gapSkills.length > 0) {
+            learningResources = getLearningResources(gapSkills);
+          }
+        }
+        
         const taskData = {
           title: `${title} - ${subtask.title}`,
           description,
@@ -46,6 +60,7 @@ class TaskController {
           daysNeeded: subtask.daysNeeded,
           dueDate: dueDate.toISOString(),
           isLearningTask: subtask.isLearningTask,
+          learningResources,
           createdBy: req.user.uid,
           createdAt: new Date().toISOString()
         };
@@ -85,11 +100,7 @@ class TaskController {
       
       console.log('Extracted data:', extractedData);
 
-      res.json({
-        success: true,
-        data: extractedData,
-        message: 'Voice input processed successfully'
-      });
+      res.json(extractedData);
     } catch (error) {
       console.error('Voice extraction error:', error);
       next(error);
@@ -178,7 +189,7 @@ class TaskController {
   async completeTask(req, res, next) {
     try {
       const { id } = req.params;
-      const { actualHours } = req.body;
+      const { actualHours, delayReason, delayDetails } = req.body;
 
       const task = await firebaseService.getTask(id);
 
@@ -199,13 +210,22 @@ class TaskController {
         completedOnTime
       }, employee);
 
-      await firebaseService.updateTask(id, {
+      const updateData = {
         status: 'completed',
         actualHours: actualHoursNum,
         taskPerformanceRate: taskScore,
         completedAt,
         completedOnTime
-      });
+      };
+
+      if (actualHoursNum > task.estimatedHours && delayReason) {
+        updateData.delayReason = delayReason;
+        if (delayDetails) {
+          updateData.delayDetails = delayDetails;
+        }
+      }
+
+      await firebaseService.updateTask(id, updateData);
 
       await firebaseService.incrementUserField(req.user.uid, 'activeTasks', -1);
 

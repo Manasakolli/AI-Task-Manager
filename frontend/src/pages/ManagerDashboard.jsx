@@ -18,13 +18,48 @@ export default function ManagerDashboard() {
   const [showAddEmployee, setShowAddEmployee] = useState(false);
   const [addEmployeeMode, setAddEmployeeMode] = useState('select');
   const [showAddTask, setShowAddTask] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [recognition, setRecognition] = useState(null);
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [showVoiceConfirm, setShowVoiceConfirm] = useState(false);
   const [employeeForm, setEmployeeForm] = useState({ name: '', email: '', password: '', skills: '' });
-  const [taskForm, setTaskForm] = useState({ title: '', description: '', skills: '', priority: 'medium', totalHours: '40' });
+  const [taskForm, setTaskForm] = useState({ title: '', description: '', skills: '', priority: 'medium', totalHours: '' });
   const [notification, setNotification] = useState(null);
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [filters, setFilters] = useState({ priority: '', status: '', deadline: '', skill: '', assignedTo: '' });
   const [filterOpen, setFilterOpen] = useState(false);
   const [tempFilters, setTempFilters] = useState({ priority: '', status: '', deadline: '', skill: '', assignedTo: '' });
+
+  useEffect(() => {
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognitionInstance = new SpeechRecognition();
+      recognitionInstance.continuous = false;
+      recognitionInstance.interimResults = false;
+      recognitionInstance.lang = 'en-US';
+      
+      recognitionInstance.onresult = async (event) => {
+        const transcript = event.results[0][0].transcript;
+        setIsRecording(false);
+        setIsProcessing(true);
+        setVoiceTranscript(transcript);
+        await processVoiceInput(transcript);
+      };
+      
+      recognitionInstance.onerror = (event) => {
+        setIsRecording(false);
+        setIsProcessing(false);
+        toast.error('Speech recognition error: ' + event.error);
+      };
+      
+      recognitionInstance.onend = () => {
+        setIsRecording(false);
+      };
+      
+      setRecognition(recognitionInstance);
+    }
+  }, []);
 
   useEffect(() => {
     loadData();
@@ -86,6 +121,41 @@ export default function ManagerDashboard() {
     }
   };
 
+  const processVoiceInput = async (transcript) => {
+    try {
+      const token = await user.getIdToken?.() || '';
+      const response = await api.post('/api/tasks/extract-voice', 
+        { voiceText: transcript },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      
+      const extracted = response.data;
+      setTaskForm({
+        title: extracted.title || '',
+        description: extracted.description || '',
+        skills: extracted.skills || '',
+        priority: extracted.priority || 'medium',
+        totalHours: extracted.totalHours?.toString() || ''
+      });
+      
+      setIsProcessing(false);
+      setVoiceTranscript('');
+    } catch (error) {
+      console.error('Voice processing error:', error);
+      setIsProcessing(false);
+      toast.error('Failed to process voice input');
+    }
+  };
+
+  const startVoiceRecording = () => {
+    if (!recognition) {
+      toast.error('Speech recognition not supported in this browser');
+      return;
+    }
+    setIsRecording(true);
+    recognition.start();
+  };
+
   const handleAddTask = async (e) => {
     e.preventDefault();
     
@@ -103,9 +173,14 @@ export default function ManagerDashboard() {
         headers: { Authorization: `Bearer ${token}` } 
       });
       
-      toast.success(`Created ${response.data.tasks?.length || 1} task(s)!`);
+      const wasVoiceInput = voiceTranscript !== '';
+      toast.success(wasVoiceInput 
+        ? `✅ Voice task created! ${response.data.tasks?.length || 1} task(s) assigned.`
+        : `Created ${response.data.tasks?.length || 1} task(s)!`
+      );
       setShowAddTask(false);
-      setTaskForm({ title: '', description: '', skills: '', priority: 'medium', totalHours: '40' });
+      setVoiceTranscript('');
+      setTaskForm({ title: '', description: '', skills: '', priority: 'medium', totalHours: '' });
       loadData();
     } catch (error) {
       console.error('Task creation error:', error.response?.data || error.message);
@@ -437,6 +512,12 @@ export default function ManagerDashboard() {
                     {task.isLearningTask && (
                       <div className="learning-note">🎓 Learning Opportunity: Employee will acquire new skills</div>
                     )}
+                    {task.status === 'completed' && task.delayReason && (
+                      <div className="delay-info">
+                        <strong>⚠️ Delay Reason:</strong> {task.delayReason}
+                        {task.delayDetails && <div className="delay-details">{task.delayDetails}</div>}
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -587,23 +668,93 @@ export default function ManagerDashboard() {
       )}
 
       {showAddTask && (
-        <div className="modal-overlay" onClick={() => setShowAddTask(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setShowAddTask(false)}>×</button>
-            <h3>Add New Task</h3>
+        <div className="modal-overlay" onClick={() => { if (!isRecording && !isProcessing) { setShowAddTask(false); setTaskForm({ title: '', description: '', skills: '', priority: 'medium', totalHours: '' }); setVoiceTranscript(''); } }}>
+          <div className={`modal-content ${isRecording ? 'recording-active' : ''} ${isProcessing ? 'processing-active' : ''}`} onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => { setShowAddTask(false); setTaskForm({ title: '', description: '', skills: '', priority: 'medium', totalHours: '' }); setVoiceTranscript(''); }} disabled={isRecording || isProcessing}>×</button>
+            <div className="modal-header-with-voice">
+              <h3>Add New Task</h3>
+              <button 
+                type="button"
+                onClick={startVoiceRecording}
+                disabled={isRecording || isProcessing}
+                className="voice-btn"
+              >
+                🎤 {isRecording ? 'Listening...' : isProcessing ? 'Processing...' : 'Voice Input'}
+              </button>
+            </div>
+            {(isRecording || isProcessing) && (
+              <div className="voice-status">
+                <div className="voice-wave">
+                  <span></span><span></span><span></span><span></span><span></span>
+                </div>
+                <p>{isRecording ? 'Listening to your voice...' : 'Processing speech and auto-filling form...'}</p>
+              </div>
+            )}
+            {voiceTranscript && (
+              <div className="voice-transcript-inline">
+                <strong>📝 You said:</strong> "{voiceTranscript}"
+              </div>
+            )}
+            {(isRecording || isProcessing) && <div className="form-overlay"></div>}
             <form onSubmit={handleAddTask}>
-              <input type="text" placeholder="Task Title" value={taskForm.title} onChange={(e) => setTaskForm({...taskForm, title: e.target.value})} required />
-              <textarea placeholder="Task Description" value={taskForm.description} onChange={(e) => setTaskForm({...taskForm, description: e.target.value})} required />
-              <input type="text" placeholder="Required Skills (comma separated)" value={taskForm.skills} onChange={(e) => setTaskForm({...taskForm, skills: e.target.value})} required />
-              <input type="number" placeholder="Total Hours" value={taskForm.totalHours} onChange={(e) => setTaskForm({...taskForm, totalHours: e.target.value})} required min="1" />
-              <select value={taskForm.priority} onChange={(e) => setTaskForm({...taskForm, priority: e.target.value})}>
+              <input type="text" placeholder="Task Title" value={taskForm.title} onChange={(e) => setTaskForm({...taskForm, title: e.target.value})} required disabled={isRecording || isProcessing} />
+              <textarea placeholder="Task Description" value={taskForm.description} onChange={(e) => setTaskForm({...taskForm, description: e.target.value})} required disabled={isRecording || isProcessing} />
+              <input type="text" placeholder="Required Skills (comma separated)" value={taskForm.skills} onChange={(e) => setTaskForm({...taskForm, skills: e.target.value})} required disabled={isRecording || isProcessing} />
+              <input type="number" placeholder="Total Hours" value={taskForm.totalHours} onChange={(e) => setTaskForm({...taskForm, totalHours: e.target.value})} required min="1" disabled={isRecording || isProcessing} />
+              <select value={taskForm.priority} onChange={(e) => setTaskForm({...taskForm, priority: e.target.value})} disabled={isRecording || isProcessing} required>
+                <option value="">Select Priority</option>
                 <option value="low">Low Priority</option>
                 <option value="medium">Medium Priority</option>
                 <option value="high">High Priority</option>
               </select>
               <div className="form-buttons">
-                <button type="submit" className="btn-submit">Create Task</button>
-                <button type="button" onClick={() => setShowAddTask(false)} className="btn-cancel">Cancel</button>
+                <button type="submit" className="btn-submit" disabled={isRecording || isProcessing}>Create Task</button>
+                <button type="button" onClick={() => { setShowAddTask(false); setTaskForm({ title: '', description: '', skills: '', priority: 'medium', totalHours: '' }); }} className="btn-cancel" disabled={isRecording || isProcessing}>Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showVoiceConfirm && (
+        <div className="modal-overlay" onClick={() => { setShowVoiceConfirm(false); setTaskForm({ title: '', description: '', skills: '', priority: 'medium', totalHours: '' }); setVoiceTranscript(''); }}>
+          <div className="modal-content voice-confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => { setShowVoiceConfirm(false); setTaskForm({ title: '', description: '', skills: '', priority: 'medium', totalHours: '' }); setVoiceTranscript(''); }}>×</button>
+            <h3>🎤 Review Voice Input</h3>
+            <div className="voice-transcript">
+              <p><strong>You said:</strong></p>
+              <p className="transcript-text">"{voiceTranscript}"</p>
+            </div>
+            <form onSubmit={handleAddTask}>
+              <label className="form-label">Task Title</label>
+              <input type="text" placeholder="Task Title" value={taskForm.title} onChange={(e) => setTaskForm({...taskForm, title: e.target.value})} required />
+              
+              <label className="form-label">Description</label>
+              <textarea placeholder="Task Description" value={taskForm.description} onChange={(e) => setTaskForm({...taskForm, description: e.target.value})} required />
+              
+              <label className="form-label">Required Skills</label>
+              <input type="text" placeholder="Required Skills (comma separated)" value={taskForm.skills} onChange={(e) => setTaskForm({...taskForm, skills: e.target.value})} required />
+              {taskForm.skills && (
+                <div style={{marginTop: '0.5rem', marginBottom: '1rem'}}>
+                  {taskForm.skills.split(',').map((skill, idx) => (
+                    <span key={idx} className="skill-chip">{skill.trim()}</span>
+                  ))}
+                </div>
+              )}
+              
+              <label className="form-label">Estimated Hours</label>
+              <input type="number" placeholder="Total Hours" value={taskForm.totalHours} onChange={(e) => setTaskForm({...taskForm, totalHours: e.target.value})} required min="1" />
+              
+              <label className="form-label">Priority</label>
+              <select value={taskForm.priority} onChange={(e) => setTaskForm({...taskForm, priority: e.target.value})} required>
+                <option value="low">Low Priority</option>
+                <option value="medium">Medium Priority</option>
+                <option value="high">High Priority</option>
+              </select>
+              
+              <div className="form-buttons">
+                <button type="submit" className="btn-submit">✓ Confirm & Create</button>
+                <button type="button" onClick={() => { setShowVoiceConfirm(false); setTaskForm({ title: '', description: '', skills: '', priority: 'medium', totalHours: '' }); setVoiceTranscript(''); }} className="btn-cancel">Edit More</button>
               </div>
             </form>
           </div>

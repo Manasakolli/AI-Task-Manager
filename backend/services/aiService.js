@@ -500,18 +500,30 @@ You are an AI assistant that extracts task information from natural language.
 Extract the following fields from the user's voice input:
 - title: A concise task title (max 60 chars)
 - description: Full task description
-- skills: Array of required technical skills
+- skills: Array of required technical skills (IMPORTANT: Extract ALL mentioned technologies, frameworks, languages, tools)
 - priority: "low", "medium", or "high"
 - totalHours: Estimated hours (default 40 if not mentioned)
+- dueDate: ISO date string if deadline mentioned (e.g., "by Friday", "in 3 days", "next week")
 
 Voice Input: "${voiceText}"
+
+Today's date: ${new Date().toISOString().split('T')[0]}
 
 Rules:
 1. If priority not mentioned, use "medium"
 2. If hours not mentioned, use 40
-3. Extract all technical skills mentioned
-4. Create a clear, professional title
-5. Keep full context in description
+3. CRITICAL: Extract ALL technical skills mentioned (React, Node.js, Python, TypeScript, CSS, etc.)
+4. Look for technology names, programming languages, frameworks, databases, tools
+5. Create a clear, professional title
+6. Keep full context in description
+7. Parse relative dates ("by Friday", "in 3 days") to ISO format
+8. If no date mentioned, leave dueDate as null
+
+Examples of skills to extract:
+- "React dashboard" → ["React"]
+- "Node.js API with MongoDB" → ["Node.js", "MongoDB", "API"]
+- "Python script" → ["Python"]
+- "TypeScript and CSS" → ["TypeScript", "CSS"]
 
 Respond with ONLY valid JSON:
 {
@@ -519,7 +531,8 @@ Respond with ONLY valid JSON:
   "description": "string",
   "skills": ["skill1", "skill2"],
   "priority": "low|medium|high",
-  "totalHours": number
+  "totalHours": number,
+  "dueDate": "YYYY-MM-DD" or null
 }
 `;
 
@@ -542,13 +555,22 @@ Respond with ONLY valid JSON:
 
       const extracted = safeParseJSON(aiResponse);
       
+      // Extract skills properly
+      let skillsString = '';
+      if (Array.isArray(extracted.skills) && extracted.skills.length > 0) {
+        skillsString = extracted.skills.join(', ');
+      } else if (typeof extracted.skills === 'string' && extracted.skills.trim()) {
+        skillsString = extracted.skills;
+      }
+      
       // Validate and set defaults
       return {
         title: extracted.title || 'New Task',
         description: extracted.description || voiceText,
-        skills: Array.isArray(extracted.skills) ? extracted.skills.join(', ') : '',
+        skills: skillsString,
         priority: ['low', 'medium', 'high'].includes(extracted.priority) ? extracted.priority : 'medium',
-        totalHours: extracted.totalHours || 40
+        totalHours: extracted.totalHours || 40,
+        dueDate: extracted.dueDate || null
       };
 
     } catch (error) {
@@ -561,7 +583,8 @@ Respond with ONLY valid JSON:
         description: voiceText,
         skills: '',
         priority: 'medium',
-        totalHours: 40
+        totalHours: 40,
+        dueDate: null
       };
     }
   }
