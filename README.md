@@ -1,4 +1,4 @@
-# Task Manager - Professional Refactored Version
+# Task Manager
 
 A production-ready, enterprise-grade task management application with AI-powered task assignment using React frontend and Firebase backend.
 
