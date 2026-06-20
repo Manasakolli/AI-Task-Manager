@@ -144,4 +144,3 @@ frontend/
 - **Backend:** Firebase (Auth + Firestore)
 - **AI:** Groq LLaMA 3 70B
 - **Build Tool:** Create React App
-
